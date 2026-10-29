@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: cms
+      POSTGRES_USER: cms
+      # Local development credentials; keep the server URL below in sync.
+      POSTGRES_PASSWORD: cms_dev_password
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      CMS_MODE: TEST
+      # Containers reach PostgreSQL by its Compose service name.
+      CMS_DATABASE_URL: "postgres://cms:cms_dev_password@postgres:5432/cms?sslmode=disable"
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # main currently exits after migration; do not restart it in a loop.
+    restart: "no"
+
+volumes:
+  postgres_data:

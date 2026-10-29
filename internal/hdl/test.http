@@ -1,0 +1,33 @@
+POST http://localhost:8080/api/v1/register
+Content-Type: application/json
+
+{
+    "username": "dogddg",
+    "nickname": "dddd",
+    "email": "11@qq.com",
+    "password": "1234567890abcdefg"
+}
+
+###
+POST http://localhost:8080/api/v1/login
+Content-Type: application/json
+Origin: https://evil.example
+Sec-Fetch-Site: cross-site
+
+
+{
+    "username": "dogddg",
+    "password": "1234567890abcdefg"
+}
+
+###
+POST http://localhost:8080/api/v1/login
+Content-Type: application/json
+Origin: http://localhost:5173
+Sec-Fetch-Site: cross-site
+
+
+{
+    "username": "dogddg",
+    "password": "1234567890abcdefg"
+}
