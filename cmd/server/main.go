@@ -110,6 +110,7 @@ func main() {
 	// http
 	engine := NewGinEngine(cfg)
 
+	engine.GET("/healthz", httpapi.Health(db))
 	authHdl := httpapi.NewAuthHdl(authSrv, rbacSrv)
 	commentHdl := httpapi.NewCommentHdl(commentSrv, authSrv, rbacSrv)
 

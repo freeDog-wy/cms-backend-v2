@@ -1,8 +1,15 @@
 .git
+.github
+.vscode
+deploy
+docs
+docker-compose.yaml
 .agents
 .codex
 .env
 .env.*
+**/.env
+**/.env.*
 !.env.example
 bin/
 tmp/

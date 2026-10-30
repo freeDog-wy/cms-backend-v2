@@ -1,0 +1,76 @@
+name: cms-backend-v2
+
+x-app: &app
+  image: ${IMAGE_REF:?Set IMAGE_REF to a published image digest}
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  networks: [backend]
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cms}
+      POSTGRES_DB: ${POSTGRES_DB:-cms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 24
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  server:
+    <<: *app
+    restart: unless-stopped
+    stop_grace_period: 25s
+    environment:
+      CMS_MODE: PROD
+      CMS_DATABASE_URL: ${CMS_DATABASE_URL:?Set CMS_DATABASE_URL}
+      CMS_TRUSTED_ORIGIN_URL: ${CMS_TRUSTED_ORIGIN_URL:?Set frontend HTTPS origin}
+      CMS_ADMIN_NAME: ${CMS_ADMIN_NAME:?Set CMS_ADMIN_NAME}
+      CMS_ADMIN_PASSWORD: ${CMS_ADMIN_PASSWORD:?Set CMS_ADMIN_PASSWORD}
+      CMS_ADMIN_EMAIL: ${CMS_ADMIN_EMAIL:?Set CMS_ADMIN_EMAIL}
+      CMS_EMAIL_DRIVER: smtp
+      CMS_SMTP_HOST: ${CMS_SMTP_HOST:?Set CMS_SMTP_HOST}
+      CMS_SMTP_PORT: ${CMS_SMTP_PORT:-0}
+      CMS_SMTP_TLS_MODE: ${CMS_SMTP_TLS_MODE:-tls}
+      CMS_SMTP_USERNAME: ${CMS_SMTP_USERNAME:?Set CMS_SMTP_USERNAME}
+      CMS_SMTP_PASSWORD: ${CMS_SMTP_PASSWORD:?Set CMS_SMTP_PASSWORD}
+      CMS_SMTP_FROM: ${CMS_SMTP_FROM:?Set CMS_SMTP_FROM}
+      CMS_SMTP_MAX_CONCURRENCY: ${CMS_SMTP_MAX_CONCURRENCY:-3}
+      CMS_SMTP_CONNECT_TIMEOUT: ${CMS_SMTP_CONNECT_TIMEOUT:-10s}
+      CMS_SMTP_SEND_TIMEOUT: ${CMS_SMTP_SEND_TIMEOUT:-20s}
+    ports:
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8082}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -T, "2", -O, /dev/null, http://127.0.0.1:8080/healthz]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 12
+
+networks:
+  backend:
+
+volumes:
+  postgres_data:

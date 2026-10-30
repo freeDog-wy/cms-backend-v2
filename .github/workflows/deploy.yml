@@ -1,0 +1,147 @@
+name: CMS Backend v2 Production Deployment
+
+on:
+  workflow_call:
+    inputs:
+      image_ref:
+        description: Tencent CCR image reference with an immutable sha256 digest.
+        required: true
+        type: string
+      source_ref:
+        description: Commit SHA containing the matching deployment files.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: cms-backend-v2-production
+    concurrency:
+      group: cms-backend-v2-production
+      cancel-in-progress: false
+    env:
+      DEPLOY_SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
+      DEPLOY_SSH_USER: ${{ vars.DEPLOY_SSH_USER || 'ubuntu' }}
+      DEPLOY_DIR: ${{ vars.DEPLOY_DIR || '/home/ubuntu/cms-backend-v2' }}
+      RELEASE_ID: ${{ inputs.source_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+      TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+    steps:
+      - name: Validate deployment parameters
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_ID" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$ ]]
+          [[ "$DEPLOY_SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+$ ]]
+          [[ "$DEPLOY_SSH_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$DEPLOY_DIR" =~ ^/(home|opt|srv)/[a-zA-Z0-9/_-]+$ ]]
+          : "${TUNNEL_SERVICE_TOKEN_ID:?Missing CF_ACCESS_CLIENT_ID}"
+          : "${TUNNEL_SERVICE_TOKEN_SECRET:?Missing CF_ACCESS_CLIENT_SECRET}"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install verified cloudflared client
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$RUNNER_TEMP/cloudflared" \
+            https://github.com/cloudflare/cloudflared/releases/download/2026.9.3/cloudflared-linux-amd64
+          echo '77e26d8d900e0b8469f416239d14b5f296525fdf79fee6f511ef55609e3fbac2  cloudflared' > "$RUNNER_TEMP/cloudflared.sha256"
+          (cd "$RUNNER_TEMP" && sha256sum --check cloudflared.sha256)
+          chmod 755 "$RUNNER_TEMP/cloudflared"
+      - name: Configure SSH client
+        env:
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${DEPLOY_SSH_PRIVATE_KEY:?Missing DEPLOY_SSH_PRIVATE_KEY}"
+          : "${SSH_KNOWN_HOSTS:?Missing SSH_KNOWN_HOSTS}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          {
+            printf '%s\n' 'Host cms-v2-production'
+            printf '  HostName %s\n' "$DEPLOY_SSH_HOST"
+            printf '  HostKeyAlias %s\n' "$DEPLOY_SSH_HOST"
+            printf '  User %s\n' "$DEPLOY_SSH_USER"
+            printf '%s\n' '  IdentityFile ~/.ssh/deploy_key' '  IdentitiesOnly yes'
+            printf '  ProxyCommand %s/cloudflared access ssh --hostname %%h\n' "$RUNNER_TEMP"
+            printf '%s\n' '  StrictHostKeyChecking yes' '  UpdateHostKeys no' \
+              '  UserKnownHostsFile ~/.ssh/known_hosts' '  BatchMode yes' \
+              '  ConnectTimeout 30' '  ServerAliveInterval 15' '  ServerAliveCountMax 3'
+          } > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+      - name: Generate production environment
+        env:
+          IMAGE_REF: ${{ inputs.image_ref }}
+          POSTGRES_USER: ${{ vars.POSTGRES_USER || 'cms' }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB || 'cms' }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          CMS_TRUSTED_ORIGIN_URL: ${{ vars.CMS_TRUSTED_ORIGIN_URL }}
+          BACKEND_ORIGIN: ${{ vars.BACKEND_ORIGIN }}
+          BACKEND_HOST_PORT: ${{ vars.BACKEND_HOST_PORT || '8082' }}
+          CMS_ADMIN_NAME: ${{ vars.CMS_ADMIN_NAME || 'admin' }}
+          CMS_ADMIN_EMAIL: ${{ vars.CMS_ADMIN_EMAIL || '372525247@qq.com' }}
+          CMS_ADMIN_PASSWORD: ${{ secrets.CMS_ADMIN_PASSWORD }}
+          CMS_SMTP_HOST: ${{ vars.CMS_SMTP_HOST }}
+          CMS_SMTP_PORT: ${{ vars.CMS_SMTP_PORT || '0' }}
+          CMS_SMTP_TLS_MODE: ${{ vars.CMS_SMTP_TLS_MODE || 'tls' }}
+          CMS_SMTP_USERNAME: ${{ vars.CMS_SMTP_USERNAME }}
+          CMS_SMTP_PASSWORD: ${{ secrets.CMS_SMTP_PASSWORD }}
+          CMS_SMTP_FROM: ${{ vars.CMS_SMTP_FROM }}
+          CMS_SMTP_MAX_CONCURRENCY: ${{ vars.CMS_SMTP_MAX_CONCURRENCY || '3' }}
+          CMS_SMTP_CONNECT_TIMEOUT: ${{ vars.CMS_SMTP_CONNECT_TIMEOUT || '10s' }}
+          CMS_SMTP_SEND_TIMEOUT: ${{ vars.CMS_SMTP_SEND_TIMEOUT || '20s' }}
+        run: go run ./deploy/render-env "$RUNNER_TEMP/production.env"
+      - name: Upload release files
+        run: |
+          set -euo pipefail
+          remote_dir="$DEPLOY_DIR/releases/$RELEASE_ID"
+          timeout 60s ssh cms-v2-production "install -d -m 700 '$remote_dir'"
+          timeout 60s scp deploy/docker-compose.yml deploy/deploy.sh "cms-v2-production:$remote_dir/"
+          timeout 60s scp "$RUNNER_TEMP/production.env" "cms-v2-production:$remote_dir/.env"
+      - name: Log in server to Tencent CCR
+        env:
+          CCR_USERNAME: ${{ secrets.CCR_USERNAME }}
+          CCR_PASSWORD: ${{ secrets.CCR_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${CCR_PASSWORD:?Missing CCR_PASSWORD}"
+          [[ "$CCR_USERNAME" =~ ^[a-zA-Z0-9@._+-]+$ ]]
+          remote_dir="$DEPLOY_DIR/releases/$RELEASE_ID"
+          timeout 60s ssh cms-v2-production "install -d -m 700 '$remote_dir/.docker-config'"
+          printf '%s' "$CCR_PASSWORD" | timeout 60s ssh cms-v2-production \
+            "env DOCKER_CONFIG='$remote_dir/.docker-config' docker login ccr.ccs.tencentyun.com --username '$CCR_USERNAME' --password-stdin"
+      - name: Deploy release
+        run: timeout 12m ssh cms-v2-production "bash '$DEPLOY_DIR/releases/$RELEASE_ID/deploy.sh'"
+      - name: Verify public HTTP tunnel
+        env:
+          BACKEND_ORIGIN: ${{ vars.BACKEND_ORIGIN }}
+        run: |
+          curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 10 --max-time 15 "${BACKEND_ORIGIN%/}/healthz"
+      - name: Remove server registry credentials
+        if: always()
+        run: |
+          if [[ "$RELEASE_ID" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$ ]] && \
+             [[ "$DEPLOY_DIR" =~ ^/(home|opt|srv)/[a-zA-Z0-9/_-]+$ ]] && \
+             test -f ~/.ssh/deploy_key; then
+            remote_config="$DEPLOY_DIR/releases/$RELEASE_ID/.docker-config"
+            timeout 30s ssh cms-v2-production "rm -f -- '$remote_config/config.json'; rmdir -- '$remote_config' 2>/dev/null || true" || true
+          fi
+      - name: Remove temporary credentials
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/production.env" ~/.ssh/deploy_key
