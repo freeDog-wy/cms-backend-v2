@@ -3,7 +3,7 @@ name: Build and Deploy CMS Backend v2
 on:
   workflow_dispatch:
   push:
-    tags: ["cms-backend-v*"]
+    tags: ["v*"]
 
 permissions:
   contents: read
