@@ -2,13 +2,11 @@ package pkg
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/alexedwards/argon2id"
+	"golang.org/x/sync/semaphore"
 )
-
-var ErrPasswordHasherBusy = errors.New("password hasher busy")
 
 type PasswordHasher interface {
 	Hash(ctx context.Context, password string) (string, error)
@@ -17,8 +15,9 @@ type PasswordHasher interface {
 
 // Argon2Hasher shares one calculation budget across hashing and verification.
 // Create one instance per process and inject it into all password consumers.
+// Calls wait for capacity until their context is canceled or expires.
 type Argon2Hasher struct {
-	concurrency KeyConcurrencyLimiter
+	concurrency *semaphore.Weighted
 	params      argon2id.Params
 }
 
@@ -29,7 +28,7 @@ func NewArgon2Hasher(maxConcurrency int) (*Argon2Hasher, error) {
 		return nil, fmt.Errorf("argon2 max concurrency must be positive")
 	}
 	return &Argon2Hasher{
-		concurrency: NewMemoryConcurrencyLimiter(maxConcurrency, 1),
+		concurrency: semaphore.NewWeighted(int64(maxConcurrency)),
 		params: argon2id.Params{
 			Memory:      19 * 1024, // KiB; preserve the project's existing parameters.
 			Iterations:  2,
@@ -44,10 +43,10 @@ func (h *Argon2Hasher) acquire(ctx context.Context) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	release, acquired := h.concurrency.TryAcquire("argon2")
-	if !acquired {
-		return nil, ErrPasswordHasherBusy
+	if err := h.concurrency.Acquire(ctx, 1); err != nil {
+		return nil, err
 	}
+	release := func() { h.concurrency.Release(1) }
 	if err := ctx.Err(); err != nil {
 		release()
 		return nil, err

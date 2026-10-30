@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/caarlos0/env/v11"
+	"github.com/freeDog-wy/cms-backend-v2/internal/pkg"
 )
 
 type Config struct {
@@ -19,11 +20,20 @@ type Config struct {
 	AdminName     string `env:"CMS_ADMIN_NAME"     envDefault:"admin"`
 	AdminPassword string `env:"CMS_ADMIN_PASSWORD" envDefault:"123456"`
 	AdminEmail    string `env:"CMS_ADMIN_EMAIL"    envDefault:"admin@example.com"`
+
+	EmailDriver string              `env:"CMS_EMAIL_DRIVER" envDefault:"log"` // log、smtp；PROD 必须使用 smtp。
+	SMTP        pkg.SMTPEmailConfig `envPrefix:"CMS_SMTP_"`
 }
 
 func (cfg *Config) Valid() error {
 	if cfg.Mode != "DEV" && cfg.Mode != "TEST" && cfg.Mode != "PROD" {
 		return fmt.Errorf("cfg mode must be DEV or TEST or PROD")
+	}
+	if cfg.EmailDriver != "log" && cfg.EmailDriver != "smtp" {
+		return fmt.Errorf("email driver must be log or smtp")
+	}
+	if cfg.Mode == "PROD" && cfg.EmailDriver != "smtp" {
+		return fmt.Errorf("PROD requires CMS_EMAIL_DRIVER=smtp")
 	}
 	return nil
 }

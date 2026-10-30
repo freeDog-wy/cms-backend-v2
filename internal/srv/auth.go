@@ -67,9 +67,6 @@ func (auth *AuthSrv) Register(ctx context.Context, userReq UserRegisterCmd) (*mo
 
 	pwdhash, err := auth.passwordHasher.Hash(ctx, userReq.Password)
 	if err != nil {
-		if errors.Is(err, pkg.ErrPasswordHasherBusy) {
-			return nil, errorx.ErrServiceBusy
-		}
 		return nil, err
 	}
 
@@ -165,9 +162,6 @@ func (auth *AuthSrv) login(ctx context.Context, userReq UserLoginCmd) (*UserLogi
 
 	match, err := auth.passwordHasher.Verify(ctx, userReq.Password, user.PasswordHash)
 	if err != nil {
-		if errors.Is(err, pkg.ErrPasswordHasherBusy) {
-			return nil, errorx.ErrServiceBusy
-		}
 		return nil, err
 	}
 	if !match {

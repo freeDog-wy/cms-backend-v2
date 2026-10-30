@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -29,6 +30,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	emailSender, err := newEmailSender(cfg)
+	if err != nil {
+		log.Fatalf("initialize email sender: %v", err)
+	}
+	// 后续邮件业务 Task 通过构造函数注入此共享实例。
+	log.Printf("Email sender initialized: %T", emailSender)
 
 	log.Printf("Bootstrap Mode: %s\n", cfg.Mode)
 
@@ -144,6 +152,24 @@ func main() {
 		log.Println("worker pool shutdown: ", err)
 	}
 	log.Println("worker pool exited")
+}
+
+func newEmailSender(cfg *config.Config) (pkg.EmailSender, error) {
+	switch cfg.EmailDriver {
+	case "log":
+		if cfg.Mode == "PROD" {
+			return nil, fmt.Errorf("PROD requires SMTP email sender")
+		}
+		from := cfg.SMTP.From
+		if from == "" {
+			from = "CMS <noreply@localhost>"
+		}
+		return pkg.NewLogEmailSender(from, nil)
+	case "smtp":
+		return pkg.NewSMTPEmailSender(cfg.SMTP)
+	default:
+		return nil, fmt.Errorf("email driver must be log or smtp")
+	}
 }
 
 func NewGinEngine(cfg *config.Config) *gin.Engine {

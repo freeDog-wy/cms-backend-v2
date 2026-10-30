@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/alexedwards/argon2id"
 )
@@ -37,30 +38,89 @@ func TestArgon2HasherRoundTrip(t *testing.T) {
 	}
 }
 
-func TestArgon2HasherSharedBudgetAndErrorRelease(t *testing.T) {
+func TestArgon2HasherErrorRelease(t *testing.T) {
 	h, err := NewArgon2Hasher(1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	release, acquired := h.concurrency.TryAcquire("argon2")
-	if !acquired {
-		t.Fatal("could not occupy calculation slot")
-	}
-	defer release()
-	if _, err := h.Hash(ctx, "password"); !errors.Is(err, ErrPasswordHasherBusy) {
-		t.Fatalf("Hash while saturated: %v", err)
-	}
-	if _, err := h.Verify(ctx, "password", "invalid hash"); !errors.Is(err, ErrPasswordHasherBusy) {
-		t.Fatalf("Verify must use the same budget: %v", err)
-	}
-	release()
-
 	if _, err := h.Verify(ctx, "password", "invalid hash"); !errors.Is(err, argon2id.ErrInvalidHash) {
 		t.Fatalf("expected hash parsing error: %v", err)
 	}
 	if _, err := h.Hash(ctx, "password"); err != nil {
 		t.Fatalf("Verify error leaked the calculation slot: %v", err)
+	}
+}
+
+func TestArgon2HasherWaitsForCapacity(t *testing.T) {
+	for _, operation := range []string{"Hash", "Verify"} {
+		for _, outcome := range []string{"release", "cancel", "deadline"} {
+			t.Run(operation+"/"+outcome, func(t *testing.T) {
+				h, err := NewArgon2Hasher(1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				hash, err := h.Hash(context.Background(), "password")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !h.concurrency.TryAcquire(1) {
+					t.Fatal("could not occupy calculation slot")
+				}
+				var release sync.Once
+				freeSlot := func() { release.Do(func() { h.concurrency.Release(1) }) }
+				t.Cleanup(freeSlot)
+
+				timeout := 5 * time.Second
+				if outcome == "deadline" {
+					timeout = 200 * time.Millisecond
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
+				result := make(chan error, 1)
+				go func() {
+					if operation == "Hash" {
+						_, err := h.Hash(ctx, "password")
+						result <- err
+						return
+					}
+					match, err := h.Verify(ctx, "password", hash)
+					if err == nil && !match {
+						err = errors.New("valid password did not match")
+					}
+					result <- err
+				}()
+				select {
+				case err := <-result:
+					t.Fatalf("operation returned while capacity was occupied: %v", err)
+				case <-time.After(20 * time.Millisecond):
+				}
+
+				var wantErr error
+				switch outcome {
+				case "release":
+					freeSlot()
+				case "cancel":
+					wantErr = context.Canceled
+					cancel()
+				case "deadline":
+					wantErr = context.DeadlineExceeded
+				}
+				select {
+				case err := <-result:
+					if !errors.Is(err, wantErr) {
+						t.Fatalf("got %v, want %v", err, wantErr)
+					}
+				case <-time.After(10 * time.Second):
+					t.Fatal("operation did not finish")
+				}
+				freeSlot()
+				if !h.concurrency.TryAcquire(1) {
+					t.Fatal("operation leaked the calculation slot")
+				}
+				h.concurrency.Release(1)
+			})
+		}
 	}
 }
 
@@ -77,11 +137,10 @@ func TestArgon2HasherCanceledContext(t *testing.T) {
 	if _, err := h.Verify(ctx, "password", "invalid hash"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Verify: %v", err)
 	}
-	release, acquired := h.concurrency.TryAcquire("argon2")
-	if !acquired {
+	if !h.concurrency.TryAcquire(1) {
 		t.Fatal("canceled operation leaked the calculation slot")
 	}
-	release()
+	h.concurrency.Release(1)
 }
 
 func TestArgon2HasherVerifiesExistingParameters(t *testing.T) {
@@ -149,23 +208,21 @@ func TestArgon2HasherConcurrentCalls(t *testing.T) {
 	wg.Wait()
 	close(results)
 	for err := range results {
-		if err != nil && !errors.Is(err, ErrPasswordHasherBusy) {
+		if err != nil {
 			t.Errorf("unexpected concurrent result: %v", err)
 		}
 	}
 	// Both slots must remain usable after the concurrent work completes.
-	releaseFirst, first := h.concurrency.TryAcquire("argon2")
-	if !first {
+	if !h.concurrency.TryAcquire(1) {
 		t.Fatal("first slot leaked")
 	}
-	defer releaseFirst()
-	releaseSecond, second := h.concurrency.TryAcquire("argon2")
-	if !second {
+	defer h.concurrency.Release(1)
+	if !h.concurrency.TryAcquire(1) {
 		t.Fatal("second slot leaked")
 	}
-	defer releaseSecond()
-	if releaseExtra, extra := h.concurrency.TryAcquire("argon2"); extra {
-		releaseExtra()
+	defer h.concurrency.Release(1)
+	if h.concurrency.TryAcquire(1) {
+		h.concurrency.Release(1)
 		t.Fatal("budget exceeded two calculations")
 	}
 }
