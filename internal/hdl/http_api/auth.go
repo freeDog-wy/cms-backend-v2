@@ -67,7 +67,7 @@ func (h *AuthHdl) logout(c *gin.Context) {
 }
 
 type LoginRequest struct {
-	Username string `json:"username" binding:"required,alphanum,max=64"`
+	Username string `json:"username" binding:"required,min=3,max=64"`
 	Password string `json:"password" binding:"required,max=128"`
 }
 
