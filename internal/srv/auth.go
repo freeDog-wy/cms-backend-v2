@@ -7,12 +7,10 @@ import (
 	"time"
 
 	"github.com/freeDog-wy/cms-backend-v2/internal/errorx"
-	"github.com/freeDog-wy/cms-backend-v2/internal/event"
 	"github.com/freeDog-wy/cms-backend-v2/internal/model"
 	"github.com/freeDog-wy/cms-backend-v2/internal/pkg"
 	"github.com/freeDog-wy/cms-backend-v2/internal/repo"
 	"github.com/freeDog-wy/cms-backend-v2/internal/repo/generated"
-	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -91,14 +89,6 @@ func (auth *AuthSrv) Register(ctx context.Context, userReq UserRegisterCmd) (*mo
 		ans, err = generated.UserRepo[model.User](tx).InsertUser(ctx, user)
 		if err != nil {
 			return repo.MapUserError(err)
-		}
-		if err = generated.OutboxRepo[model.OutboxMessage](tx).InsertMessage(ctx,
-			event.UserRegistered,
-			datatypes.JSON([]byte(
-				`{"user_id": 123}`,
-			)),
-		); err != nil {
-			return err
 		}
 		return nil
 	}); err != nil {

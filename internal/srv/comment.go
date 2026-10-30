@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/freeDog-wy/cms-backend-v2/internal/errorx"
+	"github.com/freeDog-wy/cms-backend-v2/internal/event"
 	"github.com/freeDog-wy/cms-backend-v2/internal/model"
 	"github.com/freeDog-wy/cms-backend-v2/internal/repo"
 	"github.com/freeDog-wy/cms-backend-v2/internal/repo/generated"
@@ -267,7 +268,11 @@ func (s *CommentSrv) CreateGuest(ctx context.Context, cmd CreateGuestCommentCmd)
 		}
 		if len(rows) > 0 {
 			result = &rows[0]
-			return nil
+			payload, err := json.Marshal(event.CommentSubmittedPayload{CommentID: result.ID})
+			if err != nil {
+				return err
+			}
+			return generated.OutboxRepo[model.OutboxMessage](tx).InsertMessage(ctx, event.CommentSubmitted, datatypes.JSON(payload))
 		}
 		existing, err = repo.One(r.GetByRequestID(ctx, requestID))
 		if err != nil {

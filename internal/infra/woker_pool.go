@@ -3,6 +3,7 @@ package infra
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -12,6 +13,11 @@ import (
 
 type TaskHandler func(context.Context, json.RawMessage) error
 
+var (
+	ErrInvalidTaskPayload = errors.New("invalid task payload")
+	ErrTaskNotRegistered  = errors.New("task not registered")
+)
+
 type WorkerPool struct {
 	tasks  map[string]TaskHandler
 	rwmutx sync.RWMutex
@@ -19,7 +25,7 @@ type WorkerPool struct {
 }
 
 func NewWorkerPool() (*WorkerPool, error) {
-	p, err := ants.NewPool(1000)
+	p, err := ants.NewPool(1000, ants.WithNonblocking(true))
 	if err != nil {
 		return nil, err
 	}
@@ -54,12 +60,20 @@ func (p *WorkerPool) SubmitTask(
 	p.rwmutx.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("event type %q not registered", event_type)
+		return fmt.Errorf("%w: %q", ErrTaskNotRegistered, event_type)
 	}
 
 	return p.pool.Submit(func() {
-		err := handle(ctx, payload)
-		on_done(err)
+		var err error
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("task panic: %v", recovered)
+			}
+			on_done(err)
+		}()
+		if err = ctx.Err(); err == nil {
+			err = handle(ctx, payload)
+		}
 	})
 }
 

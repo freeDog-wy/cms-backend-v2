@@ -1,6 +1,6 @@
 # 通用邮件发送
 
-实现在 `internal/pkg/email.go`。`main.go` 已在数据库迁移前加载并校验邮件配置，创建一个共享 Sender；初始化不会连接 SMTP 或发送邮件。当前不注册业务邮件事件、不创建 MailSrv，后续将共享实例注入具体的业务 Task。
+实现在 `internal/pkg/email.go`。`main.go` 已在数据库迁移前加载并校验邮件配置，创建一个共享 Sender；初始化不会连接 SMTP 或发送邮件。该实例已注入评论审核通知 Task，处理 `comment.submitted` 事件，不创建 MailSrv。
 
 ## 启动配置
 
@@ -27,6 +27,7 @@ DEV、TEST 默认使用日志发送器。选择 smtp 后配置不合法会阻止
 
 ```dotenv
 CMS_EMAIL_DRIVER=smtp
+CMS_ADMIN_EMAIL=372525247@qq.com
 CMS_SMTP_FROM=CMS <sender@example.com>
 CMS_SMTP_HOST=smtp.example.com
 CMS_SMTP_PORT=465
@@ -100,7 +101,7 @@ if errors.As(err, &emailErr) && emailErr.Retryable {
 - Send 返回 nil 表示 SMTP 接受了 DATA，不表示最终送达。DATA 被接受后，QUIT 失败不再返回投递失败。
 - DATA 结果不明确、进程退出或 Outbox 成功回写失败时，重试可能重复投递。SMTP 无法提供严格一次投递保证。
 
-具体业务接入时，由 srv 在业务事务内写入 Outbox，再由对应 task 生成邮件、调用 Sender。当前 Outbox 仍只对取消和超时重试；正式接入邮件任务前，应适配 EmailError 的分类，并补齐退避、过期租约回收。等待额度也会占用工作池任务，应协调领取数量和执行容量；租约预算需要覆盖工作池排队、SendTimeout 和结果回写。
+业务 srv 在事务内写入 Outbox，再由对应 task 生成邮件、调用 Sender。Outbox 已识别 EmailError.Retryable，支持指数退避、过期租约回收、在途数量限制和基于租约的任务截止时间。评论通知的触发规则、收件人与重试边界见 [评论文档](comments.md#管理员审核邮件)。
 
 ## 验证
 

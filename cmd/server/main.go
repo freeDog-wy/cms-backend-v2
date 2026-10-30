@@ -35,7 +35,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("initialize email sender: %v", err)
 	}
-	// 后续邮件业务 Task 通过构造函数注入此共享实例。
 	log.Printf("Email sender initialized: %T", emailSender)
 
 	log.Printf("Bootstrap Mode: %s\n", cfg.Mode)
@@ -68,7 +67,7 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	outboxSrv := srv.NewOutboxSrv(db, workerPool)
+	outboxSrv := srv.NewOutboxSrv(db, workerPool, 40*time.Second)
 	sessionSrv := srv.NewSessionSrv(db)
 	authSrv := srv.NewAuthSrv(db, passwordHasher)
 	rbacSrv := srv.NewRBACSrv(db)
@@ -85,7 +84,13 @@ func main() {
 	}
 
 	// task
-	workerPool.RegisterTask(event.UserRegistered, task.ATaskOccured)
+	commentReviewTask, err := task.NewCommentReviewTask(db, emailSender, cfg.AdminEmail)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := workerPool.RegisterTask(event.CommentSubmitted, commentReviewTask.Handle); err != nil {
+		log.Fatal(err)
+	}
 
 	// job
 	// 所有 Job 共享生命周期上下文，退出时统一取消。
