@@ -38,7 +38,7 @@ type SessionRepo[T any] interface {
 	GetValidByTokenHash(
 		ctx context.Context,
 		tokenHash []byte,
-	) (*T, error)
+	) ([]T, error)
 
 	// 注销当前会话。
 	//

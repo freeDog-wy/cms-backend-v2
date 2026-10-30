@@ -51,20 +51,28 @@ func main() {
 		log.Fatal(err)
 	}
 
+	passwordHasher, err := pkg.NewArgon2Hasher(5)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	if cfg.Mode == "PROD" || cfg.Mode == "TEST" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
 	outboxSrv := srv.NewOutboxSrv(db, workerPool)
 	sessionSrv := srv.NewSessionSrv(db)
-	passwordHasher, err := pkg.NewArgon2Hasher(5)
-	if err != nil {
-		log.Fatal(err)
-	}
 	authSrv := srv.NewAuthSrv(db, passwordHasher)
+	rbacSrv := srv.NewRBACSrv(db)
+	commentSrv := srv.NewCommentSrv(db, cfg.TrustedOriginURL)
+
+	// 首次加载失败不阻止登录和其他业务；评论接口在加载成功前返回 503。
+	if err := commentSrv.RefreshManifest(context.Background()); err != nil {
+		log.Printf("initial comment manifest: %v", err)
+	}
 
 	// business init
-	if err := bootstrap.AdminInit(context.Background(), authSrv, cfg); err != nil {
+	if err := bootstrap.AdminInit(context.Background(), authSrv, rbacSrv, cfg); err != nil {
 		log.Fatal(err)
 	}
 
@@ -75,10 +83,13 @@ func main() {
 	// 所有 Job 共享生命周期上下文，退出时统一取消。
 	jobsCtx, cancelJobs := context.WithCancel(context.Background())
 	defer cancelJobs()
+	if _, err := scheduler.AddJob("@every 5m", job.NewCommentManifestJob(jobsCtx, commentSrv)); err != nil {
+		log.Fatal(err)
+	}
 	if _, err := scheduler.AddJob("@every 10s", job.NewOutboxHandleJob(jobsCtx, outboxSrv)); err != nil {
 		log.Fatal(err)
 	}
-	if _, err := scheduler.AddJob("@every 5m", job.NewSessionCleanupJob(jobsCtx, sessionSrv)); err != nil {
+	if _, err := scheduler.AddJob("@every 30m", job.NewSessionCleanupJob(jobsCtx, sessionSrv)); err != nil {
 		log.Fatal(err)
 	}
 	scheduler.Start()
@@ -86,9 +97,11 @@ func main() {
 	// http
 	engine := NewGinEngine(cfg)
 
-	authHdl := httpapi.NewAuthHdl(authSrv)
+	authHdl := httpapi.NewAuthHdl(authSrv, rbacSrv)
+	commentHdl := httpapi.NewCommentHdl(commentSrv, authSrv, rbacSrv)
 
 	authHdl.RegisterRoutes(engine)
+	commentHdl.RegisterRoutes(engine)
 
 	httpServer := &http.Server{
 		Addr:    ":8080",

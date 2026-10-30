@@ -33,6 +33,29 @@ func NewAuthSrv(db *gorm.DB, passwordHasher pkg.PasswordHasher) *AuthSrv {
 	}
 }
 
+func (s *AuthSrv) Authenticate(ctx context.Context, token string) (int64, error) {
+	digest, err := pkg.TokenDigest(token)
+	if err != nil {
+		return 0, errorx.ErrUnauthenticated
+	}
+	session, err := repo.One(generated.SessionRepo[model.Session](s.db).GetValidByTokenHash(ctx, digest))
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, errorx.ErrUnauthenticated
+	}
+	if err != nil {
+		return 0, err
+	}
+	return session.UserID, nil
+}
+
+func (s *AuthSrv) Logout(ctx context.Context, token string) error {
+	digest, err := pkg.TokenDigest(token)
+	if err != nil {
+		return nil
+	}
+	return generated.SessionRepo[model.Session](s.db).DeleteByTokenHash(ctx, digest)
+}
+
 type UserRegisterCmd struct {
 	Username string  `json:"username"`
 	Nickname string  `json:"nickname"`

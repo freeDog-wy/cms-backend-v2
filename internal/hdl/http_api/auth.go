@@ -13,16 +13,18 @@ import (
 
 type AuthHdl struct {
 	authSrv *srv.AuthSrv
+	rbacSrv *srv.RBACSrv
 }
 
-func NewAuthHdl(authSrv *srv.AuthSrv) *AuthHdl {
+func NewAuthHdl(authSrv *srv.AuthSrv, rbacSrv *srv.RBACSrv) *AuthHdl {
 	return &AuthHdl{
 		authSrv: authSrv,
+		rbacSrv: rbacSrv,
 	}
 }
 
 func (h *AuthHdl) RegisterRoutes(route *gin.Engine) {
-	g := route.Group("/api/v1")
+	g := route.Group("/api/v1/auth")
 
 	// g.POST("/register", h.register)
 
@@ -30,6 +32,38 @@ func (h *AuthHdl) RegisterRoutes(route *gin.Engine) {
 	loginLimiter := httpmiddleware.IPRateLimit(20, time.Minute, 10)
 
 	g.POST("/login", loginLimiter, httpmiddleware.BodyLimit(4*1024), h.login)
+	g.GET("/me", httpmiddleware.RequireSession(h.authSrv), h.me)
+	g.POST("/logout", h.logout)
+}
+
+func (h *AuthHdl) me(c *gin.Context) {
+	id, ok := httpmiddleware.CurrentUserID(c)
+	if !ok {
+		hdl.EchoError(c, errorx.ErrUnauthenticated)
+		return
+	}
+	permissions, err := h.rbacSrv.ListPermissions(c.Request.Context(), id)
+	if err != nil {
+		hdl.EchoError(c, err)
+		return
+	}
+	if permissions == nil {
+		permissions = []string{}
+	}
+	hdl.EchoOK(c, "success", struct {
+		ID          int64    `json:"id,string"`
+		Permissions []string `json:"permissions"`
+	}{id, permissions})
+}
+
+func (h *AuthHdl) logout(c *gin.Context) {
+	token, _ := c.Cookie("session_token")
+	if err := h.authSrv.Logout(c.Request.Context(), token); err != nil {
+		hdl.EchoError(c, err)
+		return
+	}
+	http.SetCookie(c.Writer, &http.Cookie{Name: "session_token", Path: "/", Value: "", MaxAge: -1, Expires: time.Unix(1, 0), HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+	hdl.EchoOK(c, "success", nil)
 }
 
 type LoginRequest struct {

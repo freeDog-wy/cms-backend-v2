@@ -21,7 +21,7 @@ func SessionRepo[T any](db *gorm.DB, opts ...clause.Expression) _SessionRepoInte
 type _SessionRepoInterface[T any] interface {
 	typed.Interface[T]
 	InsertSession(ctx context.Context, session model.Session) (*T, error)
-	GetValidByTokenHash(ctx context.Context, tokenHash []byte) (*T, error)
+	GetValidByTokenHash(ctx context.Context, tokenHash []byte) ([]T, error)
 	DeleteByTokenHash(ctx context.Context, tokenHash []byte) error
 	DeleteByUserID(ctx context.Context, userID int64) error
 	DeleteExpiredBatch(ctx context.Context, batchSize int) (int64, error)
@@ -50,7 +50,7 @@ func (e _SessionRepoImpl[T]) InsertSession(ctx context.Context, session model.Se
 	return result, err
 }
 
-func (e _SessionRepoImpl[T]) GetValidByTokenHash(ctx context.Context, tokenHash []byte) (*T, error) {
+func (e _SessionRepoImpl[T]) GetValidByTokenHash(ctx context.Context, tokenHash []byte) ([]T, error) {
 	var sb strings.Builder
 	_params := make([]any, 0, 2)
 
@@ -67,7 +67,7 @@ func (e _SessionRepoImpl[T]) GetValidByTokenHash(ctx context.Context, tokenHash 
 	sb.WriteString(" AND u.status = 1")
 	sb.WriteString(" )")
 
-	var result *T
+	var result []T
 	err := e.Raw(sb.String(), _params...).Scan(ctx, &result)
 	return result, err
 }

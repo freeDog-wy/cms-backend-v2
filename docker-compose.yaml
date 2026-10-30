@@ -26,6 +26,7 @@ services:
       CMS_MODE: TEST
       # Containers reach PostgreSQL by its Compose service name.
       CMS_DATABASE_URL: "postgres://cms:cms_dev_password@postgres:5432/cms?sslmode=disable"
+      CMS_TRUSTED_ORIGIN_URL: "https://elseif.site"
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

@@ -29,9 +29,9 @@ func TestLoginBodyLimit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			router := gin.New()
 			// Rejected requests must not call the authentication service.
-			h := NewAuthHdl(nil)
+			h := NewAuthHdl(nil, nil)
 			h.RegisterRoutes(router)
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/login", strings.NewReader(tc.body))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			if tc.unknownLength {
 				req.ContentLength = -1
